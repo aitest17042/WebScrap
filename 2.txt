@@ -13,8 +13,9 @@ drive.mount('/content/drive')
 import time
 start = time.time()
 
+
 # Base directory for PDFs
-base_dir = "/content/drive/My Drive/Colab Notebooks/20250716_CR data/docs/Companies Ordinance pdfs"
+base_dir = "/content/drive/My Drive/Colab Notebooks/20250716_CR data/docs/Companies Ordinance pdfs fix"
 
 # Lists to store DataFrames
 all_dfs = []  # For main table data
@@ -28,10 +29,14 @@ def contains_phrase(pdf_path):
             pages_text = []
             sections_found = set()
             for page in reader.pages:
+
                 page_text = page.extract_text()
                 if page_text:
+                    # (CHECK!)
+                    # print(page_text)
+                    
                     # Check for 'struck\s*off' or 'deregister'
-                    if re.search(r'struck\s*off|deregister', page_text, re.IGNORECASE):
+                    if re.search(r'struck\s*off|deregister|剔\s*除|解\s*散', page_text, re.IGNORECASE):
                         # Remove spaces for section pattern matching
                         text_no_spaces = ''.join(page_text.split())
                         # Find section pattern like section{number}...) within 10 chars of 'section'
@@ -45,7 +50,6 @@ def contains_phrase(pdf_path):
         print(f"Error reading {pdf_path}: {e}")
         return False, [], ['None']
 
-# Function to extract table using regex after 'afterthedatehereof' for each page
 def extract_table_regex(pages_text, folder_date, gn_number, sections_found):
     try:
         dfs = []
@@ -53,32 +57,96 @@ def extract_table_regex(pages_text, folder_date, gn_number, sections_found):
         unique_cis = set()
 
         for page_text in pages_text:
-            # Find text after 'afterthedatehereof' in this page
-            match = re.search(r'afterthedatehereof', page_text, re.IGNORECASE)
-            if match:
-                page_text = page_text[match.end():]  # Extract text after the phrase
+            # Find all occurrences of 'after the date here of' or '公\s*告' in this page
+            matches = list(re.finditer(r'(?i:after\s*the\s*date\s*here\s*of)|公\s*告', page_text))
+            if matches:
+                # Extract text after the last match
+                last_match = matches[-1]
+                page_text = page_text[last_match.end():]  # Extract text after the last matched phrase
             else:
-                # If phrase not found, process the entire page text
+                # If neither phrase is found, process the entire page text
                 pass
 
-            # Pattern to match rows like "66139473, ACERAS (HK) TECHNOLOGY CO., LIMITED, 阿格瑞斯(香港)科技有限公司"
-            pattern = r'\b(\d{6,9})\b\s*[,|\s]+([^\u4e00-\u9fff]+?)(?:[,|\s]+([\u4e00-\u9fff\(\)]+)|(?<!\S)(?:\S{0,3}(?![\u4e00-\u9fff])))?(?=\s*\n|\s*$)'
-            matches = re.findall(pattern, page_text, re.MULTILINE)
+            # Step 1: Find all BRNs with their start and end positions
+            brn_pattern = r'(?:^[A-Za-z]{0,2}\s*)?(\d{5,11})(?=\s|$)'
+            brn_matches = [(match.group(1), match.start(), match.end()) for match in re.finditer(brn_pattern, page_text, re.MULTILINE)]
 
-            if matches:
-                # Create DataFrame from matches
-                df = pd.DataFrame(matches, columns=['CI', 'ENGLISH_NAME', 'CHINESE_NAME'])
+            # Create DataFrame for BRNs
+            brn_df = pd.DataFrame(brn_matches, columns=['BRN', 'start_pos', 'end_pos'])
+
+            # Step 2: Extract text between BRNs or for the last BRN's line
+            name_data = []
+            for i, row in brn_df.iterrows():
+                start_pos = row['end_pos']
+                # Determine end position: next BRN's start_pos or end of text
+                end_pos = brn_df['start_pos'].iloc[i + 1] if i + 1 < len(brn_df) else len(page_text)
+
+                # Extract text segment
+                text_segment = page_text[start_pos:end_pos]
+
+                # Check if this is the last BRN
+                is_last_brn = i + 1 == len(brn_df)
+
+                if is_last_brn:
+                    # For the last BRN, process only its line
+                    line_end = re.search(r'\n|$', text_segment)
+                    if line_end:
+                        text_segment = text_segment[:line_end.start()]
+                else:
+                    # For non-last BRNs, reduce multiple lines to a single line
+                    text_segment = re.sub(r'\n', ' ', text_segment)
+                    # (CHECK!) Print the reduced text for debugging
+                    # print(f"Reduced text for BRN {row['BRN']}: {text_segment}")
+
+                # Stop at '公司註冊處處長' or 'Registrar of Companies'
+                stop_match = re.search(r'(公\s*司\s*註\s*冊\s*處\s*處\s*長|Registrar\s*of\s*Companies)', text_segment, re.IGNORECASE)
+                if stop_match:
+                    text_segment = text_segment[:stop_match.start()]
+
+                # Extract English and Chinese names
+                # English name: all non-Chinese characters at the start (optional)
+                english_name_match = re.match(r'^\s*([^\u4e00-\u9fff]*)', text_segment)
+                english_name = english_name_match.group(1).strip() if english_name_match and english_name_match.group(1) else ''
+                
+                # Chinese name: Chinese characters (and parentheses) after the English name (optional)
+                # Search only after the end of the English name
+                search_start = english_name_match.end() if english_name_match else 0
+                chinese_name_match = re.search(r'[\u4e00-\u9fff\(\)]+', text_segment[search_start:])
+                chinese_name = chinese_name_match.group(0).strip() if chinese_name_match else ''
+
+                name_data.append({'BRN': row['BRN'], 'ENGLISH_NAME': english_name, 'CHINESE_NAME': chinese_name})
+
+            # Create DataFrame for names
+            name_df = pd.DataFrame(name_data)
+
+            # Step 3: Left join BRNs with names
+            df = brn_df[['BRN']].merge(name_df, on='BRN', how='left')
+
+            # Step 4: Clean up and process DataFrame
+            if not df.empty:
                 # Clean up columns
-                df['CI'] = df['CI'].str.strip()
-                df['ENGLISH_NAME'] = df['ENGLISH_NAME'].str.strip()
+                df['BRN'] = df['BRN'].str.strip()
+                df['ENGLISH_NAME'] = df['ENGLISH_NAME'].str.strip().fillna('')
                 df['CHINESE_NAME'] = df['CHINESE_NAME'].str.strip().replace('公司註冊處處長', '', regex=False).fillna('')
+
+                # Validate BRN: Ensure it's numeric and 5-11 digits
+                df = df[df['BRN'].str.match(r'^\d{5,11}$')]
+
+                # Remove duplicate BRNs, keeping the first occurrence
+                df = df.drop_duplicates(subset=['BRN'], keep='first')
+
                 # Add PUBLISHED_DATE, GOV_NOTICE_NUM, and SECTION
                 df['PUBLISHED_DATE'] = datetime.strptime(folder_date, '%Y%m%d').strftime('%Y-%m-%d')
                 df['GOV_NOTICE_NUM'] = gn_number
                 df['SECTION'] = ', '.join(sections_found)  # Combine all sections found
+
+                # Append to dfs list
                 dfs.append(df)
+
+                # Update total_rows and unique_cis
                 total_rows += len(df)
-                unique_cis.update(df['CI'])
+                unique_cis.update(df['BRN'])
+
 
         if dfs:
             combined_df = pd.concat(dfs, ignore_index=True)
