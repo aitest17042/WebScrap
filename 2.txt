@@ -124,7 +124,7 @@ for folder_name in os.listdir(base_dir):
                 summary_data.append(summary_entry)
 
 
-      # Combine main DataFrame
+# Combine main DataFrame
 if all_dfs:
     main_df = pd.concat(all_dfs, ignore_index=True)
     # Sort by PUBLISHED_DATE and GOV_NOTICE_NUM
@@ -146,3 +146,4 @@ main_df.to_excel(f'{output_dir}/main_output.xlsx', sheet_name='Sheet1', index=Fa
 summary_df.to_excel(f'{output_dir}/summary_df.xlsx', sheet_name='Sheet1', index=False, engine='openpyxl')
 print('Done.')
 end = time.time()
+print((end-start)/60)
