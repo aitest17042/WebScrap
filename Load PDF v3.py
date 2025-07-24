@@ -15,7 +15,7 @@ start = time.time()
 
 
 # Base directory for PDFs
-base_dir = "/content/drive/My Drive/Colab Notebooks/20250716_CR data/docs/Companies Ordinance pdfs fix"
+base_dir = "/content/drive/My Drive/Colab Notebooks/20250716_CR data/docs/Companies Ordinance pdfs"
 
 # Lists to store DataFrames
 all_dfs = []  # For main table data
@@ -34,7 +34,7 @@ def contains_phrase(pdf_path):
                 if page_text:
                     # (CHECK!)
                     # print(page_text)
-                    
+
                     # Check for 'struck\s*off' or 'deregister'
                     if re.search(r'struck\s*off|deregister|剔\s*除|解\s*散', page_text, re.IGNORECASE):
                         # Remove spaces for section pattern matching
@@ -68,7 +68,8 @@ def extract_table_regex(pages_text, folder_date, gn_number, sections_found):
                 pass
 
             # Step 1: Find all BRNs with their start and end positions
-            brn_pattern = r'(?:^[A-Za-z]{0,2}\s*)?(\d{5,11})(?=\s|$)'
+            # brn_pattern = r'(?:^[A-Za-z]{0,2}\s*)?(\d{5,11})(?=\s|$)'
+            brn_pattern = r'^(?:\s*[A-Za-z]{0,2}\s*)?(\d{5,11})(?=\s|$)'
             brn_matches = [(match.group(1), match.start(), match.end()) for match in re.finditer(brn_pattern, page_text, re.MULTILINE)]
 
             # Create DataFrame for BRNs
@@ -107,12 +108,15 @@ def extract_table_regex(pages_text, folder_date, gn_number, sections_found):
                 # English name: all non-Chinese characters at the start (optional)
                 english_name_match = re.match(r'^\s*([^\u4e00-\u9fff]*)', text_segment)
                 english_name = english_name_match.group(1).strip() if english_name_match and english_name_match.group(1) else ''
-                
-                # Chinese name: Chinese characters (and parentheses) after the English name (optional)
-                # Search only after the end of the English name
+
+                # Chinese name: all text from first Chinese character to end of segment, with spaces removed
                 search_start = english_name_match.end() if english_name_match else 0
-                chinese_name_match = re.search(r'[\u4e00-\u9fff\(\)]+', text_segment[search_start:])
-                chinese_name = chinese_name_match.group(0).strip() if chinese_name_match else ''
+                first_chinese_match = re.search(r'[\u4e00-\u9fff]', text_segment[search_start:])
+                chinese_name = ''
+                if first_chinese_match:
+                    chinese_start = search_start + first_chinese_match.start()
+                    # Include all characters from first Chinese character to end and remove spaces
+                    chinese_name = re.sub(r'\s+', '', text_segment[chinese_start:].strip())
 
                 name_data.append({'BRN': row['BRN'], 'ENGLISH_NAME': english_name, 'CHINESE_NAME': chinese_name})
 
